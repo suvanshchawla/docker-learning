@@ -11,6 +11,18 @@ services:
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
+  
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      - DB_HOST=postgres
+      - DB_NAME=${POSTGRES_DB}
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+    depends_on:
       postgres:
         condition: service_healthy
   
