@@ -52,8 +52,31 @@ The API is available at:
 - <http://localhost:5000/>
 - <http://localhost:5000/users>
 
-The root endpoint returns a simple greeting. The `/users` endpoint queries
-PostgreSQL and returns users as JSON.
+The root endpoint returns a simple greeting. The `/users` endpoint supports
+listing users with `GET` and creating users with `POST`.
+
+List users:
+
+```bash
+curl http://localhost:5000/users
+```
+
+Create a user:
+
+```bash
+curl -X POST http://localhost:5000/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "status": "active",
+    "role": "admin",
+    "phone": "+1-555-0100"
+  }'
+```
+
+The `name`, `email`, and `status` fields are required. `role` and `phone` are
+optional.
 
 Useful commands:
 
@@ -76,16 +99,35 @@ The last command is destructive for local database data.
 ## Database migrations
 
 The migration history is in `migrations/`. It creates the `users` table and
-then adds `created_at` and `status` columns.
+then adds `created_at`, `status`, `role`, and `phone` columns.
 
-Migrations are not currently run automatically by `docker compose up`, and the
-current image does not copy the Alembic files into the runtime image. As a
-result, a new PostgreSQL volume will not have a `users` table yet, so
-`/users` requires the schema to be created separately.
+Migrations now run automatically through the dedicated `migrate` Compose
+service:
 
-This is an intentional next step for the Docker exercise: add a migration
-step, either through an application entrypoint or a one-shot Compose service,
-and make the API wait for that step before serving requests.
+1. PostgreSQL starts and must pass its healthcheck.
+2. The `migrate` service runs `alembic upgrade head`.
+3. The API starts only after migrations complete successfully.
+
+To run migrations again after changing the migration files:
+
+```bash
+docker compose run --rm migrate
+```
+
+When creating a new migration revision, mount the host `migrations/` directory
+into the temporary container. Without this volume mount, Alembic writes the
+revision inside the container, and the generated file is lost when the
+container is removed:
+
+```bash
+docker compose run --rm \
+  -v "$(pwd)/migrations:/app/migrations" \
+  migrate \
+  alembic revision -m "add phone to users"
+```
+
+The migration service uses the same application image as the API. The
+`Dockerfile` copies `alembic.ini` and `migrations/` into that image.
 
 ## Development notes
 
@@ -94,10 +136,11 @@ and make the API wait for that step before serving requests.
 - PostgreSQL data is stored in the named `postgres-data` volume.
 - Gunicorn serves the Flask application in the container.
 - The container runs the application as the unprivileged `appuser`.
+- The `migrate` service applies the schema before the API starts.
 
 ## Current limitations
 
 - There are no automated tests yet.
-- Migrations are not part of the container startup flow.
-- The API currently supports only a greeting endpoint and a read-only users
-  endpoint.
+- Database connections are opened and closed for each request; connection
+  pooling has not been added yet.
+- The API currently has no update or delete user operations.
