@@ -213,6 +213,20 @@ def update_user(user_id):
         cursor.execute(update_query, values)
         updated_row = cursor.fetchone()
 
+        if updated_row is None:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+            return {"error": "User not found"}, 404
+
+        cursor.execute(
+            """
+            INSERT INTO user_audit_log (user_id, action)
+            VALUES (%s, %s)
+            """,
+            (user_id, "user_updated")
+        )
+
         conn.commit()
 
     except Exception as e:
@@ -222,16 +236,17 @@ def update_user(user_id):
         conn.close()
         return {"error": "Database update failed"}, 500
 
+    cursor.close()
+    conn.close()
 
-    if updated_row:
-        return {
-            "id": updated_row[0],
-            "name": updated_row[1],
-            "email": updated_row[2],
-            "status": updated_row[3],
-            "role": updated_row[4],
-            "phone": updated_row[5],
-        }
+    return {
+        "id": updated_row[0],
+        "name": updated_row[1],
+        "email": updated_row[2],
+        "status": updated_row[3],
+        "role": updated_row[4],
+        "phone": updated_row[5],
+    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

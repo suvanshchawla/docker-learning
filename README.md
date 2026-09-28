@@ -17,6 +17,7 @@ project is intended as a hands-on introduction to:
 ├── Dockerfile             # Multi-stage API image
 ├── docker-compose.yml     # API and PostgreSQL services
 ├── requirements.txt       # Python dependencies
+├── test_app.py            # Pytest suite for the API
 ├── alembic.ini            # Alembic configuration
 └── migrations/            # Database migration history
 ```
@@ -97,9 +98,13 @@ curl -X DELETE http://localhost:5000/users/1
 ```
 
 The list and individual-user endpoints return user records with `id`, `name`,
-`email`, `status`, `role`, and `phone`. Requests with a missing required
-creation field or an unknown update field return a `400` response. Looking up
-or deleting a user that does not exist returns `404`.
+`email`, `status`, `role`, and `phone`. Requests with an empty body, a missing
+required creation field, or an unknown update field return a `400` response.
+Looking up, updating, or deleting a user that does not exist returns `404`.
+
+Every successful update also writes a `user_updated` row to the
+`user_audit_log` table in the same transaction. If either write fails, both are
+rolled back and the API returns `500`.
 
 Useful commands:
 
@@ -121,10 +126,11 @@ The last command is destructive for local database data.
 
 ## Database migrations
 
-The migration history is in `migrations/`. It creates the `users` table and
-then adds `created_at`, `status`, `role`, and `phone` columns.
+The migration history is in `migrations/`. It creates the `users` table, adds
+`created_at`, `status`, `role`, and `phone` columns, and then creates the
+`user_audit_log` table.
 
-Migrations now run automatically through the dedicated `migrate` Compose
+Migrations run automatically through the dedicated `migrate` Compose
 service:
 
 1. PostgreSQL starts and must pass its healthcheck.
@@ -152,6 +158,37 @@ docker compose run --rm \
 The migration service uses the same application image as the API. The
 `Dockerfile` copies `alembic.ini` and `migrations/` into that image.
 
+## Running tests
+
+The tests in `test_app.py` mock `psycopg2`, so they do not need Docker or a
+running database. Set up a virtual environment once:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt pytest
+```
+
+On Debian or Ubuntu, `python3 -m venv` may first require
+`sudo apt install python3.12-venv`.
+
+Then run the suite with the virtual environment activated:
+
+```bash
+pytest -v
+```
+
+`requirements.txt` must be installed as well as `pytest`, because `app.py`
+imports `psycopg2` at startup. `pytest` is not added to `requirements.txt` so
+that it stays out of the production image.
+
+To run the tests without a local Python setup, use a throwaway container:
+
+```bash
+docker run --rm -v "$(pwd)":/app -w /app python:3.12-slim \
+  sh -c "pip install -q -r requirements.txt pytest && pytest -v"
+```
+
 ## Development notes
 
 - The API container listens on port `5000`.
@@ -163,10 +200,9 @@ The migration service uses the same application image as the API. The
 
 ## Current limitations
 
-- There are no automated tests yet.
+- The tests use a mocked database, so they do not check the SQL against a
+  real PostgreSQL instance.
 - Database connections are opened and closed for each request; connection
   pooling has not been added yet.
-- A `PATCH` request for an ID that does not exist currently has no explicit
-  not-found response.
 - Request validation is limited to checking required fields on creation and
   the allowed field names on updates.
