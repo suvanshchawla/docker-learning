@@ -52,8 +52,9 @@ The API is available at:
 - <http://localhost:5000/>
 - <http://localhost:5000/users>
 
-The root endpoint returns a simple greeting. The `/users` endpoint supports
-listing users with `GET` and creating users with `POST`.
+The root endpoint returns a simple greeting. The `/users` endpoints let you
+list and create users, fetch an individual user, update selected fields, or
+delete a user.
 
 List users:
 
@@ -61,7 +62,7 @@ List users:
 curl http://localhost:5000/users
 ```
 
-Create a user:
+Create a user (`name` and `email` are required; `status` defaults to `active`):
 
 ```bash
 curl -X POST http://localhost:5000/users \
@@ -69,14 +70,36 @@ curl -X POST http://localhost:5000/users \
   -d '{
     "name": "Ada Lovelace",
     "email": "ada@example.com",
-    "status": "active",
     "role": "admin",
     "phone": "+1-555-0100"
   }'
 ```
 
-The `name`, `email`, and `status` fields are required. `role` and `phone` are
-optional.
+Fetch one user:
+
+```bash
+curl http://localhost:5000/users/1
+```
+
+Update one or more fields. Accepted fields are `name`, `email`, `status`,
+`role`, and `phone`:
+
+```bash
+curl -X PATCH http://localhost:5000/users/1 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "inactive", "phone": "+1-555-0101"}'
+```
+
+Delete a user:
+
+```bash
+curl -X DELETE http://localhost:5000/users/1
+```
+
+The list and individual-user endpoints return user records with `id`, `name`,
+`email`, `status`, `role`, and `phone`. Requests with a missing required
+creation field or an unknown update field return a `400` response. Looking up
+or deleting a user that does not exist returns `404`.
 
 Useful commands:
 
@@ -143,4 +166,7 @@ The migration service uses the same application image as the API. The
 - There are no automated tests yet.
 - Database connections are opened and closed for each request; connection
   pooling has not been added yet.
-- The API currently has no update or delete user operations.
+- A `PATCH` request for an ID that does not exist currently has no explicit
+  not-found response.
+- Request validation is limited to checking required fields on creation and
+  the allowed field names on updates.
