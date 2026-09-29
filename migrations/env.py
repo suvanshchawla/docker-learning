@@ -55,13 +55,14 @@ def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
 
     db_host = os.environ["DB_HOST"]
+    db_port = os.environ.get("DB_PORT", "5432")
     db_name = os.environ["DB_NAME"]
     db_user = os.environ["DB_USER"]
     db_password = os.environ["DB_PASSWORD"]
 
     database_url = (
         f"postgresql+psycopg2://{db_user}:{db_password}"
-        f"@{db_host}:5432/{db_name}"
+        f"@{db_host}:{db_port}/{db_name}"
     )
 
     connectable = engine_from_config(

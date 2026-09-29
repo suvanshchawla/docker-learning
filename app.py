@@ -5,6 +5,26 @@ import psycopg2
 app = Flask(__name__)
 app.json.sort_keys = False  # Disable sorting of JSON keys
 
+
+def get_connection():
+    return psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=os.environ.get("DB_PORT", "5432"),
+        database=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+    )
+
+
+PHONE_MAX_LENGTH = 15  # matches users.phone VARCHAR(15)
+
+
+def phone_error(data):
+    phone = data.get("phone")
+    if phone is not None and len(str(phone)) > PHONE_MAX_LENGTH:
+        return {"error": f"phone must be at most {PHONE_MAX_LENGTH} characters"}, 400
+    return None
+
 @app.route("/")
 def hello():
     return "Hello from Flask + PostgreSQL!"
@@ -12,12 +32,7 @@ def hello():
 
 @app.route("/users")
 def users():
-    conn = psycopg2.connect(
-        host=os.environ["DB_HOST"],
-        database=os.environ["DB_NAME"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-    )
+    conn = get_connection()
 
     cursor = conn.cursor()
     cursor.execute("""
@@ -55,12 +70,11 @@ def create_user():
         if field not in data:
             return {"error": f"Missing required field: {field}"}, 400
 
-    conn = psycopg2.connect(
-        host=os.environ["DB_HOST"],
-        database=os.environ["DB_NAME"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-    )
+    error = phone_error(data)
+    if error:
+        return error
+
+    conn = get_connection()
 
     cursor = conn.cursor()
 
@@ -98,12 +112,7 @@ def create_user():
 
 @app.route("/users/<int:user_id>", methods=["GET"])
 def get_user(user_id):
-    conn = psycopg2.connect(
-        host=os.environ["DB_HOST"],
-        database=os.environ["DB_NAME"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-    )
+    conn = get_connection()
 
     cursor = conn.cursor()
     cursor.execute("""
@@ -130,13 +139,7 @@ def get_user(user_id):
 
 @app.route("/users/<int:user_id>", methods=["DELETE"])
 def delete_user(user_id):
-    conn = psycopg2.connect(
-        host=os.environ["DB_HOST"],
-        database=os.environ["DB_NAME"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-
-    )
+    conn = get_connection()
 
     cursor = conn.cursor()
     cursor.execute("""
@@ -184,12 +187,11 @@ def update_user(user_id):
     if not data:
         return {"error": "Request body must contain JSON"}, 400
 
-    conn = psycopg2.connect(
-            host=os.environ["DB_HOST"],
-            database=os.environ["DB_NAME"],
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASSWORD"],
-    )
+    error = phone_error(data)
+    if error:
+        return error
+
+    conn = get_connection()
 
     cursor = conn.cursor()
 

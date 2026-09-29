@@ -1,5 +1,7 @@
 # Flask + PostgreSQL Docker Demo
 
+[![Tests](https://github.com/suvanshchawla/docker-learning/actions/workflows/tests.yml/badge.svg)](https://github.com/suvanshchawla/docker-learning/actions/workflows/tests.yml)
+
 A small Flask API backed by PostgreSQL and managed with Docker Compose. This
 project is intended as a hands-on introduction to:
 
@@ -17,7 +19,12 @@ project is intended as a hands-on introduction to:
 ├── Dockerfile             # Multi-stage API image
 ├── docker-compose.yml     # API and PostgreSQL services
 ├── requirements.txt       # Python dependencies
-├── test_app.py            # Pytest suite for the API
+├── requirements-dev.txt   # Test dependencies (pytest, testcontainers)
+├── pytest.ini             # Pytest configuration and markers
+├── conftest.py            # Shared fixtures, including the test database
+├── test_app.py            # Unit tests with a mocked database
+├── test_integration.py    # Integration tests against real PostgreSQL
+├── .github/workflows/     # GitHub Actions CI
 ├── alembic.ini            # Alembic configuration
 └── migrations/            # Database migration history
 ```
@@ -99,7 +106,8 @@ curl -X DELETE http://localhost:5000/users/1
 
 The list and individual-user endpoints return user records with `id`, `name`,
 `email`, `status`, `role`, and `phone`. Requests with an empty body, a missing
-required creation field, or an unknown update field return a `400` response.
+required creation field, an unknown update field, or a `phone` longer than 15
+characters return a `400` response.
 Looking up, updating, or deleting a user that does not exist returns `404`.
 
 Every successful update also writes a `user_updated` row to the
@@ -160,39 +168,62 @@ The migration service uses the same application image as the API. The
 
 ## Running tests
 
-The tests in `test_app.py` mock `psycopg2`, so they do not need Docker or a
-running database. Set up a virtual environment once:
+There are two test suites:
+
+- `test_app.py` contains unit tests. They replace `psycopg2` with a mock, so
+  they run in milliseconds and cover error paths that are hard to trigger
+  against a real database, such as rollbacks after a failed write.
+- `test_integration.py` contains integration tests. They start a throwaway
+  `postgres:17` container with [Testcontainers](https://testcontainers.com/),
+  apply the real Alembic migrations, and send requests through the API. They
+  check the SQL against the real schema, the audit-log writes, database
+  constraints, and that the migrations downgrade and upgrade cleanly.
+
+Set up a virtual environment once:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt pytest
+pip install -r requirements-dev.txt
 ```
 
 On Debian or Ubuntu, `python3 -m venv` may first require
 `sudo apt install python3.12-venv`.
 
-Then run the suite with the virtual environment activated:
+With the virtual environment activated and Docker running, run everything:
 
 ```bash
 pytest -v
 ```
 
-`requirements.txt` must be installed as well as `pytest`, because `app.py`
-imports `psycopg2` at startup. `pytest` is not added to `requirements.txt` so
-that it stays out of the production image.
-
-To run the tests without a local Python setup, use a throwaway container:
+To run only the fast unit tests, without Docker:
 
 ```bash
-docker run --rm -v "$(pwd)":/app -w /app python:3.12-slim \
-  sh -c "pip install -q -r requirements.txt pytest && pytest -v"
+pytest -m "not integration"
 ```
+
+If Docker is not running, the integration tests are skipped with a message
+rather than failing. In CI, where the `CI` environment variable is set, they
+fail instead, so a broken Docker setup cannot hide untested code.
+
+The test dependencies live in `requirements-dev.txt` so that they stay out of
+the production image.
+
+The integration tests connect to PostgreSQL on a random port. The app and
+Alembic read the port from `DB_PORT`, which defaults to `5432`, so Docker
+Compose needs no changes.
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs on every push and pull request. It installs
+`requirements-dev.txt`, runs the full test suite (GitHub's Ubuntu runners
+have Docker, so the integration tests run too), and builds the Docker image.
 
 ## Development notes
 
 - The API container listens on port `5000`.
-- The API reaches PostgreSQL at the Compose service hostname `postgres`.
+- The API reaches PostgreSQL at the Compose service hostname `postgres`, on
+  port `DB_PORT` (default `5432`).
 - PostgreSQL data is stored in the named `postgres-data` volume.
 - Gunicorn serves the Flask application in the container.
 - The container runs the application as the unprivileged `appuser`.
@@ -200,9 +231,8 @@ docker run --rm -v "$(pwd)":/app -w /app python:3.12-slim \
 
 ## Current limitations
 
-- The tests use a mocked database, so they do not check the SQL against a
-  real PostgreSQL instance.
 - Database connections are opened and closed for each request; connection
   pooling has not been added yet.
-- Request validation is limited to checking required fields on creation and
-  the allowed field names on updates.
+- Request validation is limited to required fields on creation, allowed field
+  names on updates, and the `phone` length. Email format and value types are
+  not checked.

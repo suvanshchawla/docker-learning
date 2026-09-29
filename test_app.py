@@ -24,13 +24,6 @@ def db_env(monkeypatch):
 
 
 @pytest.fixture
-def client():
-    app_module.app.config["TESTING"] = True
-    with app_module.app.test_client() as client:
-        yield client
-
-
-@pytest.fixture
 def db():
     """Patch psycopg2.connect and hand back (conn, cursor) mocks."""
     conn = MagicMock()
@@ -53,7 +46,7 @@ def test_connect_uses_env_vars(client, db):
     client.get("/users")
 
     connect.assert_called_once_with(
-        host="localhost", database="testdb", user="test", password="secret"
+        host="localhost", port="5432", database="testdb", user="test", password="secret"
     )
 
 
