@@ -59,10 +59,16 @@ The API is available at:
 
 - <http://localhost:5000/>
 - <http://localhost:5000/users>
+- <http://localhost:5000/health>
 
 The root endpoint returns a simple greeting. The `/users` endpoints let you
 list and create users, fetch an individual user, update selected fields, or
 delete a user.
+
+`/health` checks that the API can reach PostgreSQL. It returns
+`200 {"status": "ok", "database": "ok"}`, or
+`503 {"status": "error", "database": "unavailable"}` if the database cannot be
+reached within 3 seconds.
 
 List users:
 
@@ -105,10 +111,27 @@ curl -X DELETE http://localhost:5000/users/1
 ```
 
 The list and individual-user endpoints return user records with `id`, `name`,
-`email`, `status`, `role`, and `phone`. Requests with an empty body, a missing
-required creation field, an unknown update field, or a `phone` longer than 15
-characters return a `400` response.
-Looking up, updating, or deleting a user that does not exist returns `404`.
+`email`, `status`, `role`, and `phone`.
+
+Request bodies are validated before the database is touched:
+
+| Field | Rule |
+|---|---|
+| `name` | Required on create. Must be a non-empty string. |
+| `email` | Required on create. Must look like `user@domain.tld`. |
+| `status` | Optional. `active` (the default) or `inactive`. |
+| `role` | Optional. A string, or `null` to clear it. |
+| `phone` | Optional. A string of at most 15 characters, or `null` to clear it. |
+
+A body that isn't a JSON object, an unknown field, or a value that breaks a
+rule returns `400` with a message such as
+`{"error": "email must be a valid email address"}`. Looking up, updating, or
+deleting a user that does not exist returns `404`.
+
+Every error is JSON with an `error` key, including unknown URLs
+(`404 {"error": "Not Found"}`), unsupported methods (`405`), and unexpected
+server errors (`500 {"error": "Internal server error"}`, with the details in
+the API logs).
 
 Every successful update also writes a `user_updated` row to the
 `user_audit_log` table in the same transaction. If either write fails, both are
@@ -228,11 +251,12 @@ have Docker, so the integration tests run too), and builds the Docker image.
 - Gunicorn serves the Flask application in the container.
 - The container runs the application as the unprivileged `appuser`.
 - The `migrate` service applies the schema before the API starts.
+- The `api` service has a Compose healthcheck that calls `/health` every 10
+  seconds. `docker compose ps` shows it as `healthy` or `unhealthy`.
 
 ## Current limitations
 
 - Database connections are opened and closed for each request; connection
   pooling has not been added yet.
-- Request validation is limited to required fields on creation, allowed field
-  names on updates, and the `phone` length. Email format and value types are
-  not checked.
+- Email validation only checks the basic `user@domain.tld` shape. It does
+  not confirm that the address exists, and duplicate emails are allowed.

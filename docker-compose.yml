@@ -13,6 +13,13 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      # urlopen raises on a 503, so the check fails when the database is down
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
   
   migrate:
     build: .

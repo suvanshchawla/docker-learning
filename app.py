@@ -1,33 +1,99 @@
 from flask import Flask, request
+from werkzeug.exceptions import HTTPException
 import os
+import re
 import psycopg2
 
 app = Flask(__name__)
 app.json.sort_keys = False  # Disable sorting of JSON keys
 
 
-def get_connection():
+def get_connection(**kwargs):
     return psycopg2.connect(
         host=os.environ["DB_HOST"],
         port=os.environ.get("DB_PORT", "5432"),
         database=os.environ["DB_NAME"],
         user=os.environ["DB_USER"],
         password=os.environ["DB_PASSWORD"],
+        **kwargs,
     )
 
 
+USER_FIELDS = ["name", "email", "status", "role", "phone"]
+REQUIRED_FIELDS = ["name", "email"]
+STATUSES = ["active", "inactive"]
 PHONE_MAX_LENGTH = 15  # matches users.phone VARCHAR(15)
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def phone_error(data):
-    phone = data.get("phone")
-    if phone is not None and len(str(phone)) > PHONE_MAX_LENGTH:
-        return {"error": f"phone must be at most {PHONE_MAX_LENGTH} characters"}, 400
+def validate_user(data, partial=False):
+    """Return an error message for an invalid user payload, or None if it's valid.
+
+    partial=True is for PATCH, where every field is optional.
+    """
+    if not isinstance(data, dict) or not data:
+        return "Request body must contain JSON"
+
+    for field in data:
+        if field not in USER_FIELDS:
+            return f"Invalid field: {field}"
+
+    if not partial:
+        for field in REQUIRED_FIELDS:
+            if field not in data:
+                return f"Missing required field: {field}"
+
+    for field in ["name", "email"]:
+        if field in data and (not isinstance(data[field], str) or not data[field].strip()):
+            return f"{field} must be a non-empty string"
+
+    if "email" in data and not EMAIL_PATTERN.match(data["email"]):
+        return "email must be a valid email address"
+
+    if "status" in data and data["status"] not in STATUSES:
+        return f"status must be one of: {', '.join(STATUSES)}"
+
+    for field in ["role", "phone"]:
+        if data.get(field) is not None and not isinstance(data[field], str):
+            return f"{field} must be a string or null"
+
+    if data.get("phone") is not None and len(data["phone"]) > PHONE_MAX_LENGTH:
+        return f"phone must be at most {PHONE_MAX_LENGTH} characters"
+
     return None
+
+
+@app.errorhandler(HTTPException)
+def http_error(e):
+    # e.g. an unknown URL (404) or a wrong method (405)
+    return {"error": e.name}, e.code
+
+
+@app.errorhandler(Exception)
+def unexpected_error(e):
+    app.logger.exception("Unhandled error")
+    return {"error": "Internal server error"}, 500
+
 
 @app.route("/")
 def hello():
     return "Hello from Flask + PostgreSQL!"
+
+
+@app.route("/health")
+def health():
+    try:
+        conn = get_connection(connect_timeout=3)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+        finally:
+            conn.close()
+    except psycopg2.Error as e:
+        app.logger.warning(f"Health check failed: {e}")
+        return {"status": "error", "database": "unavailable"}, 503
+
+    return {"status": "ok", "database": "ok"}
 
 
 @app.route("/users")
@@ -60,19 +126,11 @@ def users():
 
 @app.route("/users", methods=["POST"])
 def create_user():
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
-    required_fields = ["name", "email"]
-
-    if not data:
-        return {"error": "Request body must contain JSON"}, 400
-    for field in required_fields:
-        if field not in data:
-            return {"error": f"Missing required field: {field}"}, 400
-
-    error = phone_error(data)
+    error = validate_user(data)
     if error:
-        return error
+        return {"error": error}, 400
 
     conn = get_connection()
 
@@ -182,27 +240,15 @@ def delete_user(user_id):
 
 @app.route("/users/<int:user_id>", methods=["PATCH"])
 def update_user(user_id):
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
-    if not data:
-        return {"error": "Request body must contain JSON"}, 400
-
-    error = phone_error(data)
+    error = validate_user(data, partial=True)
     if error:
-        return error
+        return {"error": error}, 400
 
     conn = get_connection()
 
     cursor = conn.cursor()
-
-
-    # Check if the fields to update are valid
-    valid_fields = ["name", "email", "status", "role", "phone"]
-    for field in data.keys():
-        if field not in valid_fields:
-            cursor.close()
-            conn.close()
-            return {"error": f"Invalid field: {field}"}, 400
 
     # Build the update query dynamically based on the provided fields
     set_clause = ", ".join([f"{field} = %s" for field in data.keys()])

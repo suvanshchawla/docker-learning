@@ -51,14 +51,39 @@ def test_update_missing_user_writes_no_audit_row(client, real_db):
     assert query(real_db, "SELECT count(*) FROM user_audit_log") == [(0,)]
 
 
-def test_update_null_name_rolls_back(client, real_db):
+def test_update_null_name_is_rejected(client, real_db):
     create(client)
 
     resp = client.patch("/users/1", json={"name": None})
 
-    assert resp.status_code == 500
+    assert resp.status_code == 400
     assert query(real_db, "SELECT name FROM users WHERE id = 1") == [("Ada Lovelace",)]
     assert query(real_db, "SELECT count(*) FROM user_audit_log") == [(0,)]
+
+
+def test_update_can_clear_optional_fields(client, real_db):
+    create(client)
+
+    resp = client.patch("/users/1", json={"role": None, "phone": None})
+
+    assert resp.status_code == 200
+    assert query(real_db, "SELECT role, phone FROM users WHERE id = 1") == [(None, None)]
+
+
+def test_health_with_real_database(client, real_db):
+    resp = client.get("/health")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok", "database": "ok"}
+
+
+def test_health_when_database_unreachable(client, real_db, monkeypatch):
+    monkeypatch.setenv("DB_PORT", "1")  # nothing listens on this port
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert resp.get_json() == {"status": "error", "database": "unavailable"}
 
 
 def test_delete_then_fetch(client, real_db):
