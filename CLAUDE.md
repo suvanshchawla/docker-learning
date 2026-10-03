@@ -20,6 +20,9 @@ docker compose run --rm -v "$(pwd)/migrations:/app/migrations" migrate alembic r
 pytest -v                                # everything (integration tests need Docker)
 pytest -m "not integration"              # fast unit tests only, no Docker
 pytest test_app.py::test_name            # single test
+
+# Benchmark GET /users on a throwaway stack (optional gunicorn flags as the argument)
+scripts/bench.sh "--workers 4"
 ```
 
 There is no linter configured. CI (`.github/workflows/tests.yml`) runs `pytest -v` then `docker build .`.

@@ -20,6 +20,7 @@ project is intended as a hands-on introduction to:
 ├── docker-compose.yml     # API and PostgreSQL services
 ├── requirements.txt       # Python dependencies
 ├── requirements-dev.txt   # Test dependencies (pytest, testcontainers)
+├── scripts/               # bench.sh and load.py benchmark tools
 ├── pytest.ini             # Pytest configuration and markers
 ├── conftest.py            # Shared fixtures, including the test database
 ├── test_app.py            # Unit tests with a mocked database
@@ -277,6 +278,42 @@ Total connections to PostgreSQL are roughly
 `max_connections` (100 by default). If a process needs more than
 `DB_POOL_MAX` connections at once, the extra request fails with a `500`
 rather than waiting.
+
+## Benchmark
+
+`scripts/bench.sh` starts a throwaway copy of the stack (Compose project
+`bench`, port 5001, removed afterwards), creates 50 users, and sends
+`GET /users` requests from 20 concurrent clients using `scripts/load.py`. It
+prints throughput, latency percentiles, and the most PostgreSQL connections it
+saw. Pass gunicorn flags to change the server:
+
+```bash
+scripts/bench.sh                  # gunicorn default: 1 sync worker
+scripts/bench.sh "--workers 4"
+REQUESTS=10000 CONCURRENCY=50 scripts/bench.sh "--workers 4"
+```
+
+The flags reach the container through the `GUNICORN_CMD_ARGS` variable, which
+`docker-compose.yml` passes to the `api` service, so the same variable works
+with `docker compose up`.
+
+Results for 3,000 requests at a concurrency of 20, comparing the commit before
+pooling with the pooled version (one machine, so read these as relative
+numbers):
+
+| Gunicorn | Pooling | Requests/sec | p50 | p95 |
+|---|---|---|---|---|
+| 1 worker | no | 168 | 115 ms | 133 ms |
+| 1 worker | yes | 942 | 19 ms | 24 ms |
+| 4 workers | no | 534 | 36 ms | 41 ms |
+| 4 workers | yes | 1,994 | 8 ms | 12 ms |
+
+Without pooling, opening a connection (network handshake plus authentication)
+was most of each request's time. With pooling, peak connections matched
+`workers x DB_POOL_MIN`: 2 with one worker and 8 with four.
+
+To compare against an older commit, check it out in a worktree, copy
+`scripts/` and `docker-compose.yml` into it, and run the script there.
 
 ## Current limitations
 
