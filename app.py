@@ -44,7 +44,7 @@ def get_pool():
     with _pool_lock:
         if _pool is None:
             _pool = pool.ThreadedConnectionPool(
-                int(os.environ.get("DB_POOL_MIN", "5")),
+                int(os.environ.get("DB_POOL_MIN", "2")),
                 int(os.environ.get("DB_POOL_MAX", "10")),
                 connect_timeout=CONNECT_TIMEOUT,
                 **_connection_params(),

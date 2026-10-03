@@ -264,7 +264,7 @@ gets its own pool.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DB_POOL_MIN` | `5` | Connections opened up front, and the most idle connections kept between requests |
+| `DB_POOL_MIN` | `2` | Connections opened up front, and the most idle connections kept between requests |
 | `DB_POOL_MAX` | `10` | Most connections one process will hold at once |
 
 The pool only keeps `DB_POOL_MIN` idle connections. During a burst of
