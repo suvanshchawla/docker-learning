@@ -126,3 +126,32 @@ def test_requests_share_pooled_connections(client, real_db, monkeypatch):
         "SELECT count(*) FROM pg_stat_activity "
         "WHERE datname = current_database() AND pid <> pg_backend_pid()",
     ) == [(3,)]
+
+PRE_UNIQUE_EMAIL = "6733a9378be3"  # the revision just before the unique-email migration
+
+
+def test_migration_refuses_duplicate_emails(pg, real_db):
+    run_alembic(pg, "downgrade", PRE_UNIQUE_EMAIL)
+    try:
+        with real_db, real_db.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO users (name, email, status) VALUES "
+                "('One', 'Ada@example.com', 'active'), "
+                "('Two', 'ada@example.com', 'active'), "
+                "('Three', 'ADA@EXAMPLE.COM', 'active'), "
+                "('Four', 'grace@example.com', 'active')"
+            )
+
+        with pytest.raises(RuntimeError, match="Cannot make users.email unique") as excinfo:
+            run_alembic(pg, "upgrade", "head")
+
+        # The message names the duplicate (lowercased) and its row count, not the unique email.
+        assert "ada@example.com (3 rows)" in str(excinfo.value)
+        assert "grace@example.com" not in str(excinfo.value)
+        # Failing loudly must not delete anything.
+        assert query(real_db, "SELECT count(*) FROM users") == [(4,)]
+    finally:
+        # Leave the shared database at head for the other tests.
+        with real_db, real_db.cursor() as cursor:
+            cursor.execute("TRUNCATE users, user_audit_log RESTART IDENTITY")
+        run_alembic(pg, "upgrade", "head")
