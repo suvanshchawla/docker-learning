@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from psycopg2.extensions import TRANSACTION_STATUS_IDLE
 
 import app as app_module
 
@@ -21,13 +22,18 @@ def db_env(monkeypatch):
     monkeypatch.setenv("DB_NAME", "testdb")
     monkeypatch.setenv("DB_USER", "test")
     monkeypatch.setenv("DB_PASSWORD", "secret")
+    monkeypatch.setenv("DB_POOL_MIN", "1")  # the pool opens this many connections up front
 
 
 @pytest.fixture
 def db():
     """Patch psycopg2.connect and hand back (conn, cursor) mocks."""
     conn = MagicMock()
+    conn.closed = 0  # the pool checks these when a connection is returned
+    conn.info.transaction_status = TRANSACTION_STATUS_IDLE
     cursor = MagicMock()
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.side_effect = lambda *exc: cursor.close()  # `with` closes the cursor
     conn.cursor.return_value = cursor
     with patch.object(app_module.psycopg2, "connect", return_value=conn) as connect:
         yield connect, conn, cursor
@@ -46,8 +52,47 @@ def test_connect_uses_env_vars(client, db):
     client.get("/users")
 
     connect.assert_called_once_with(
-        host="localhost", port="5432", database="testdb", user="test", password="secret"
+        host="localhost", port="5432", database="testdb", user="test", password="secret",
+        connect_timeout=3,
     )
+
+
+def test_connections_are_reused_across_requests(client, db):
+    connect, conn, cursor = db
+    cursor.fetchall.return_value = []
+
+    for _ in range(5):
+        assert client.get("/users").status_code == 200
+
+    connect.assert_called_once()
+    conn.close.assert_not_called()
+
+
+def test_connection_returned_to_pool_after_failed_update(client, db):
+    connect, conn, cursor = db
+    cursor.execute.side_effect = [None, RuntimeError("boom")]
+    cursor.fetchone.return_value = USER_ROW
+
+    assert client.patch("/users/1", json={"name": "Alicia"}).status_code == 500
+
+    # The next request must be able to borrow the same connection again.
+    cursor.execute.side_effect = None
+    cursor.fetchall.return_value = []
+    assert client.get("/users").status_code == 200
+    connect.assert_called_once()
+
+
+def test_closed_connection_is_not_reused(client, db):
+    connect, conn, cursor = db
+    cursor.fetchall.return_value = []
+
+    client.get("/users")
+    conn.closed = 2  # e.g. the server restarted and dropped the connection
+    client.get("/users")
+    conn.closed = 0
+    client.get("/users")
+
+    assert connect.call_count == 2  # the dead connection was discarded, a new one opened
 
 
 # GET /users
@@ -66,7 +111,7 @@ def test_list_users(client, db):
         ]
     }
     cursor.close.assert_called_once()
-    conn.close.assert_called_once()
+    conn.close.assert_not_called()  # returned to the pool, not closed
 
 
 def test_list_users_empty(client, db):
@@ -174,7 +219,7 @@ def test_delete_user_not_found(client, db):
     assert resp.get_json() == {"error": "User not found"}
     assert cursor.execute.call_count == 1  # no DELETE issued
     conn.commit.assert_not_called()
-    conn.close.assert_called_once()
+    conn.close.assert_not_called()  # returned to the pool, not closed
 
 
 # PATCH /users/<id>
@@ -195,7 +240,7 @@ def test_update_user(client, db):
     assert audit_call.args[1] == (1, "user_updated")
     conn.commit.assert_called_once()
     cursor.close.assert_called_once()
-    conn.close.assert_called_once()
+    conn.close.assert_not_called()  # returned to the pool, not closed
 
 
 def test_update_user_invalid_field(client, db):
@@ -228,7 +273,7 @@ def test_update_user_db_error_rolls_back(client, db):
     assert resp.get_json() == {"error": "Database update failed"}
     conn.rollback.assert_called_once()
     conn.commit.assert_not_called()
-    conn.close.assert_called_once()
+    conn.close.assert_not_called()  # returned to the pool, not closed
 
 
 def test_update_user_audit_failure_rolls_back(client, db):
@@ -253,7 +298,7 @@ def test_update_user_not_found(client, db):
     assert resp.get_json() == {"error": "User not found"}
     assert cursor.execute.call_count == 1  # no audit row written
     conn.commit.assert_not_called()
-    conn.close.assert_called_once()
+    conn.close.assert_not_called()  # returned to the pool, not closed
 
 
 # Validation
@@ -357,7 +402,7 @@ def test_health_ok(client, db):
     assert resp.status_code == 200
     assert resp.get_json() == {"status": "ok", "database": "ok"}
     assert connect.call_args.kwargs["connect_timeout"] == 3
-    conn.close.assert_called_once()
+    conn.close.assert_not_called()  # returned to the pool, not closed
 
 
 def test_health_database_down(client, db):

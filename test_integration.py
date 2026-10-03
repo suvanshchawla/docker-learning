@@ -112,3 +112,17 @@ def test_migrations_downgrade_and_upgrade(pg, real_db):
 
     run_alembic(pg, "upgrade", "head")
     assert query(real_db, "SELECT to_regclass('users'), to_regclass('user_audit_log')") == [("users", "user_audit_log")]
+
+
+def test_requests_share_pooled_connections(client, real_db, monkeypatch):
+    monkeypatch.setenv("DB_POOL_MIN", "3")
+
+    for _ in range(20):
+        assert client.get("/users").status_code == 200
+
+    # 20 requests, but only the 3 pooled connections (this query's own is excluded).
+    assert query(
+        real_db,
+        "SELECT count(*) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND pid <> pg_backend_pid()",
+    ) == [(3,)]

@@ -10,6 +10,14 @@ import app as app_module
 ALEMBIC_INI = Path(__file__).parent / "alembic.ini"
 
 
+@pytest.fixture(autouse=True)
+def fresh_pool():
+    """Every test gets its own connection pool, built from that test's DB_* env."""
+    app_module.close_pool()
+    yield
+    app_module.close_pool()
+
+
 @pytest.fixture
 def client():
     app_module.app.config["TESTING"] = True

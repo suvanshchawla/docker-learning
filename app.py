@@ -1,22 +1,81 @@
+from contextlib import contextmanager
 from flask import Flask, request
+from psycopg2 import pool
 from werkzeug.exceptions import HTTPException
+import atexit
 import os
 import re
+import threading
 import psycopg2
 
 app = Flask(__name__)
 app.json.sort_keys = False  # Disable sorting of JSON keys
 
 
-def get_connection(**kwargs):
-    return psycopg2.connect(
+CONNECT_TIMEOUT = 3  # seconds to wait when opening a new connection
+
+
+def _connection_params():
+    return dict(
         host=os.environ["DB_HOST"],
         port=os.environ.get("DB_PORT", "5432"),
         database=os.environ["DB_NAME"],
         user=os.environ["DB_USER"],
         password=os.environ["DB_PASSWORD"],
-        **kwargs,
     )
+
+
+def get_connection(**kwargs):
+    """Open a standalone, unpooled connection (the caller must close it)."""
+    return psycopg2.connect(**_connection_params(), **kwargs)
+
+
+# One pool per process. Gunicorn workers are separate processes, so each gets
+# its own pool: total connections = workers x DB_POOL_MAX x replicas.
+# psycopg2 only keeps DB_POOL_MIN idle connections; any beyond that are closed
+# when returned, so DB_POOL_MIN is how many stay warm between bursts.
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def get_pool():
+    """Create the connection pool on first use (so it's built inside each worker)."""
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = pool.ThreadedConnectionPool(
+                int(os.environ.get("DB_POOL_MIN", "5")),
+                int(os.environ.get("DB_POOL_MAX", "10")),
+                connect_timeout=CONNECT_TIMEOUT,
+                **_connection_params(),
+            )
+        return _pool
+
+
+def close_pool():
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            _pool.closeall()
+            _pool = None
+
+
+atexit.register(close_pool)
+
+
+@contextmanager
+def db_connection():
+    """Borrow a connection from the pool and always give it back.
+
+    putconn() rolls back any transaction the caller left open and discards
+    connections that have been closed, so a dead connection never goes back in.
+    """
+    p = get_pool()
+    conn = p.getconn()
+    try:
+        yield conn
+    finally:
+        p.putconn(conn)
 
 
 USER_FIELDS = ["name", "email", "status", "role", "phone"]
@@ -83,12 +142,8 @@ def hello():
 @app.route("/health")
 def health():
     try:
-        conn = get_connection(connect_timeout=3)
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT 1")
-        finally:
-            conn.close()
+        with db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT 1")
     except psycopg2.Error as e:
         app.logger.warning(f"Health check failed: {e}")
         return {"status": "error", "database": "unavailable"}, 503
@@ -98,17 +153,12 @@ def health():
 
 @app.route("/users")
 def users():
-    conn = get_connection()
-
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT id, name, email, status, role, phone
-    FROM users
-    """)
-    rows = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
+    with db_connection() as conn, conn.cursor() as cursor:
+        cursor.execute("""
+        SELECT id, name, email, status, role, phone
+        FROM users
+        """)
+        rows = cursor.fetchall()
 
     return {
         "users": [
@@ -132,31 +182,23 @@ def create_user():
     if error:
         return {"error": error}, 400
 
-    conn = get_connection()
-
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        INSERT INTO users (name, email, status, role, phone)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, name, email, status, role, phone;
-        """,
-        (
-            data["name"],
-            data["email"],
-            data.get("status", "active"),
-            data.get("role"),
-            data.get("phone"),
-        ),
-    )
-
-    row = cursor.fetchone()
-
-    conn.commit()
-
-    cursor.close()
-    conn.close()
+    with db_connection() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO users (name, email, status, role, phone)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, name, email, status, role, phone;
+            """,
+            (
+                data["name"],
+                data["email"],
+                data.get("status", "active"),
+                data.get("role"),
+                data.get("phone"),
+            ),
+        )
+        row = cursor.fetchone()
+        conn.commit()
 
     return {
         "id": row[0],
@@ -170,18 +212,13 @@ def create_user():
 
 @app.route("/users/<int:user_id>", methods=["GET"])
 def get_user(user_id):
-    conn = get_connection()
-
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT id, name, email, status, role, phone
-    FROM users
-    WHERE id = %s
-    """, (user_id,))
-    row = cursor.fetchone()
-
-    cursor.close()
-    conn.close()
+    with db_connection() as conn, conn.cursor() as cursor:
+        cursor.execute("""
+        SELECT id, name, email, status, role, phone
+        FROM users
+        WHERE id = %s
+        """, (user_id,))
+        row = cursor.fetchone()
 
     if row:
         return {
@@ -197,35 +234,22 @@ def get_user(user_id):
 
 @app.route("/users/<int:user_id>", methods=["DELETE"])
 def delete_user(user_id):
-    conn = get_connection()
+    with db_connection() as conn, conn.cursor() as cursor:
+        cursor.execute("""
+        SELECT id, name, email, status, role, phone
+        FROM users
+        WHERE id = %s
+        """, (user_id,))
+        row = cursor.fetchone()
 
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT id, name, email, status, role, phone
-    FROM users
-    WHERE id = %s
-    """, (user_id,))
+        if row is None:
+            return {"error": "User not found"}, 404
 
-    row = cursor.fetchone()
-
-    if row is None:
-        cursor.close()
-        conn.close()
-
-        return {"error": "User not found"}, 404
-
-
-    cursor.execute(
-        "DELETE FROM users WHERE id = %s",
-        (user_id,)
-    )
-
-
-
-    conn.commit()
-
-    cursor.close()
-    conn.close()
+        cursor.execute(
+            "DELETE FROM users WHERE id = %s",
+            (user_id,)
+        )
+        conn.commit()
 
     return {"message": "User deleted successfully",
             "user": {
@@ -246,10 +270,6 @@ def update_user(user_id):
     if error:
         return {"error": error}, 400
 
-    conn = get_connection()
-
-    cursor = conn.cursor()
-
     # Build the update query dynamically based on the provided fields
     set_clause = ", ".join([f"{field} = %s" for field in data.keys()])
     values = list(data.values())
@@ -257,44 +277,41 @@ def update_user(user_id):
 
     update_query = f"UPDATE users SET {set_clause} WHERE id = %s RETURNING id, name, email, status, role, phone"
 
-    try:
-        cursor.execute(update_query, values)
-        updated_row = cursor.fetchone()
+    with db_connection() as conn, conn.cursor() as cursor:
+        try:
+            cursor.execute(update_query, values)
+            updated_row = cursor.fetchone()
 
-        if updated_row is None:
+            if updated_row is None:
+                conn.rollback()
+                return {"error": "User not found"}, 404
+
+            cursor.execute(
+                """
+                INSERT INTO user_audit_log (user_id, action)
+                VALUES (%s, %s)
+                """,
+                (user_id, "user_updated")
+            )
+
+            conn.commit()
+
+            return {
+                "id": updated_row[0],
+                "name": updated_row[1],
+                "email": updated_row[2],
+                "status": updated_row[3],
+                "role": updated_row[4],
+                "phone": updated_row[5],
+            }
+
+        except Exception as e:
             conn.rollback()
-            cursor.close()
-            conn.close()
-            return {"error": "User not found"}, 404
+            app.logger.error("Database error while updating user")
+            print(f"Database error: {e}")
 
-        cursor.execute(
-            """
-            INSERT INTO user_audit_log (user_id, action)
-            VALUES (%s, %s)
-            """,
-            (user_id, "user_updated")
-        )
+            return {"error": "Database update failed"}, 500
 
-        conn.commit()
-
-    except Exception as e:
-        conn.rollback()
-        print(f"Database error: {e}")
-        cursor.close()
-        conn.close()
-        return {"error": "Database update failed"}, 500
-
-    cursor.close()
-    conn.close()
-
-    return {
-        "id": updated_row[0],
-        "name": updated_row[1],
-        "email": updated_row[2],
-        "status": updated_row[3],
-        "role": updated_row[4],
-        "phone": updated_row[5],
-    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

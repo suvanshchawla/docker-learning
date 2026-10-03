@@ -254,9 +254,32 @@ have Docker, so the integration tests run too), and builds the Docker image.
 - The `api` service has a Compose healthcheck that calls `/health` every 10
   seconds. `docker compose ps` shows it as `healthy` or `unhealthy`.
 
+## Connection pooling
+
+The API keeps a `psycopg2` `ThreadedConnectionPool` instead of opening a
+connection per request. Each request borrows a connection and returns it when
+done; the pool rolls back anything left uncommitted and discards connections
+that have closed. It is created on first use, so every Gunicorn worker process
+gets its own pool.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DB_POOL_MIN` | `5` | Connections opened up front, and the most idle connections kept between requests |
+| `DB_POOL_MAX` | `10` | Most connections one process will hold at once |
+
+The pool only keeps `DB_POOL_MIN` idle connections. During a burst of
+concurrent requests it opens extra connections (up to `DB_POOL_MAX`), but
+closes the surplus ones as they are returned. Raise `DB_POOL_MIN` if your
+traffic is bursty and you want more connections kept warm.
+
+Total connections to PostgreSQL are roughly
+`workers x DB_POOL_MAX x replicas` at peak (`workers x DB_POOL_MIN x replicas` when idle), which must stay below the server's
+`max_connections` (100 by default). If a process needs more than
+`DB_POOL_MAX` connections at once, the extra request fails with a `500`
+rather than waiting.
+
 ## Current limitations
 
-- Database connections are opened and closed for each request; connection
-  pooling has not been added yet.
+
 - Email validation only checks the basic `user@domain.tld` shape. It does
   not confirm that the address exists, and duplicate emails are allowed.
