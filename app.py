@@ -85,6 +85,18 @@ PHONE_MAX_LENGTH = 15  # matches users.phone VARCHAR(15)
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def normalize_user(data):
+    """Trim the name and email in place, e.g. ' ada@example.com ' becomes 'ada@example.com'.
+
+    Runs before validate_user, so a whitespace-only value is rejected as empty.
+    """
+    if isinstance(data, dict):
+        for field in ["name", "email"]:
+            if isinstance(data.get(field), str):
+                data[field] = data[field].strip()
+    return data
+
+
 def validate_user(data, partial=False):
     """Return an error message for an invalid user payload, or None if it's valid.
 
@@ -126,6 +138,11 @@ def validate_user(data, partial=False):
 def http_error(e):
     # e.g. an unknown URL (404) or a wrong method (405)
     return {"error": e.name}, e.code
+
+
+@app.errorhandler(psycopg2.errors.UniqueViolation)
+def unique_violation(e):
+    return {"error": "Email already exists"}, 409
 
 
 @app.errorhandler(Exception)
@@ -176,7 +193,7 @@ def users():
 
 @app.route("/users", methods=["POST"])
 def create_user():
-    data = request.get_json(silent=True)
+    data = normalize_user(request.get_json(silent=True))
 
     error = validate_user(data)
     if error:
@@ -264,7 +281,7 @@ def delete_user(user_id):
 
 @app.route("/users/<int:user_id>", methods=["PATCH"])
 def update_user(user_id):
-    data = request.get_json(silent=True)
+    data = normalize_user(request.get_json(silent=True))
 
     error = validate_user(data, partial=True)
     if error:
@@ -304,6 +321,11 @@ def update_user(user_id):
                 "role": updated_row[4],
                 "phone": updated_row[5],
             }
+
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            app.logger.warning("Unique constraint violation while updating user")
+            raise  # re-raised so the unique_violation handler returns the 409
 
         except Exception as e:
             conn.rollback()

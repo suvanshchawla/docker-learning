@@ -33,7 +33,12 @@ def db():
     conn.info.transaction_status = TRANSACTION_STATUS_IDLE
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor
-    cursor.__exit__.side_effect = lambda *exc: cursor.close()  # `with` closes the cursor
+
+    def close_cursor(*exc):
+        cursor.close()  # `with` closes the cursor...
+        return False  # ...and never swallows an exception raised inside the block
+
+    cursor.__exit__.side_effect = close_cursor
     conn.cursor.return_value = cursor
     with patch.object(app_module.psycopg2, "connect", return_value=conn) as connect:
         yield connect, conn, cursor
@@ -148,6 +153,26 @@ def test_create_user_defaults(client, db):
     assert resp.status_code == 201
     params = cursor.execute.call_args.args[1]
     assert params == ("Carol", "carol@example.com", "active", None, None)
+
+
+def test_create_user_trims_name_and_email(client, db):
+    _, _, cursor = db
+    cursor.fetchone.return_value = (3, "Carol", "carol@example.com", "active", None, None)
+
+    resp = client.post("/users", json={"name": "  Carol\n", "email": "  carol@example.com \t"})
+
+    assert resp.status_code == 201
+    assert cursor.execute.call_args.args[1][:2] == ("Carol", "carol@example.com")
+
+
+def test_create_user_duplicate_email(client, db):
+    _, conn, cursor = db
+    cursor.execute.side_effect = app_module.psycopg2.errors.UniqueViolation("duplicate key value violates unique constraint")
+
+    resp = client.post("/users", json={"name": "Alice", "email": "alice@example.com"})
+
+    assert resp.status_code == 409
+    assert resp.get_json() == {"error": "Email already exists"}
 
 
 @pytest.mark.parametrize("missing", ["name", "email"])
@@ -301,6 +326,31 @@ def test_update_user_not_found(client, db):
     conn.close.assert_not_called()  # returned to the pool, not closed
 
 
+def test_update_user_trims_name_and_email(client, db):
+    _, _, cursor = db
+    cursor.fetchone.return_value = USER_ROW
+
+    resp = client.patch("/users/1", json={"name": " Alicia ", "email": " alice@example.com "})
+
+    assert resp.status_code == 200
+    update_call = cursor.execute.call_args_list[0]
+    assert update_call.args[1] == ["Alicia", "alice@example.com", 1]
+
+
+def test_update_user_duplicate_email(client, db):
+    _, conn, cursor = db
+    cursor.fetchone.return_value = USER_ROW
+    cursor.execute.side_effect = app_module.psycopg2.errors.UniqueViolation("duplicate key value violates unique constraint")
+
+    resp = client.patch("/users/1", json={"email": "bob@example.com"})
+
+    assert resp.status_code == 409
+    assert resp.get_json() == {"error": "Email already exists"}
+    conn.rollback.assert_called_once()
+    conn.commit.assert_not_called()
+    assert cursor.execute.call_count == 1  # no audit row written
+
+
 # Validation
 
 VALID_USER = {"name": "Alice", "email": "alice@example.com"}
@@ -311,6 +361,8 @@ VALID_USER = {"name": "Alice", "email": "alice@example.com"}
     ({**VALID_USER, "name": "   "}, "name must be a non-empty string"),
     ({**VALID_USER, "name": 42}, "name must be a non-empty string"),
     ({**VALID_USER, "email": None}, "email must be a non-empty string"),
+    ({**VALID_USER, "email": "   "}, "email must be a non-empty string"),
+    ({**VALID_USER, "email": " not an email "}, "email must be a valid email address"),
     ({**VALID_USER, "email": "not-an-email"}, "email must be a valid email address"),
     ({**VALID_USER, "email": "a@b"}, "email must be a valid email address"),
     ({**VALID_USER, "status": "deleted"}, "status must be one of: active, inactive"),

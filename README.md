@@ -118,8 +118,8 @@ Request bodies are validated before the database is touched:
 
 | Field | Rule |
 |---|---|
-| `name` | Required on create. Must be a non-empty string. |
-| `email` | Required on create. Must look like `user@domain.tld`. |
+| `name` | Required on create. Surrounding whitespace is trimmed. Must be a non-empty string. |
+| `email` | Required on create. Surrounding whitespace is trimmed. Must look like `user@domain.tld`, and must not already belong to another user (case is ignored). |
 | `status` | Optional. `active` (the default) or `inactive`. |
 | `role` | Optional. A string, or `null` to clear it. |
 | `phone` | Optional. A string of at most 15 characters, or `null` to clear it. |
@@ -128,6 +128,12 @@ A body that isn't a JSON object, an unknown field, or a value that breaks a
 rule returns `400` with a message such as
 `{"error": "email must be a valid email address"}`. Looking up, updating, or
 deleting a user that does not exist returns `404`.
+
+Email addresses are unique regardless of case, so `Ada@example.com` and
+`ada@example.com` are the same address. Creating a user with an email that is
+already taken, or updating a user to one, returns
+`409 {"error": "Email already exists"}`. A user can change the case of their
+own email. A rejected update changes nothing and writes no audit row.
 
 Every error is JSON with an `error` key, including unknown URLs
 (`404 {"error": "Not Found"}`), unsupported methods (`405`), and unexpected
@@ -340,6 +346,5 @@ To compare against an older commit, check it out in a worktree, copy
 
 - Email validation only checks the basic `user@domain.tld` shape. It does
   not confirm that the address exists.
-- Duplicate emails are rejected by the database, but the API does not handle
-  that error yet: creating or updating a user with an email that is already
-  taken returns `500` instead of `409`.
+- Names and emails are trimmed by the API, not by the database. Rows inserted
+  some other way (directly in SQL) can still contain surrounding whitespace.

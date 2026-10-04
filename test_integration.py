@@ -180,3 +180,56 @@ def test_unique_index_rejects_case_variant_emails(real_db):
             "INSERT INTO users (name, email, status) VALUES ('Three', 'grace@example.com', 'active')"
         )
     assert query(real_db, "SELECT count(*) FROM users") == [(2,)]
+
+
+def test_create_duplicate_email_returns_409(client, real_db):
+    create(client)
+
+    resp = client.post("/users", json={**ADA, "email": "ADA@Example.com"})
+
+    assert resp.status_code == 409
+    assert resp.get_json() == {"error": "Email already exists"}
+    assert query(real_db, "SELECT count(*) FROM users") == [(1,)]
+    # The pooled connection was returned cleanly, so the next request works.
+    assert client.get("/users").status_code == 200
+
+
+def test_update_to_taken_email_returns_409_without_audit_row(client, real_db):
+    create(client)
+    create(client, {"name": "Bob", "email": "bob@example.com"})
+
+    resp = client.patch("/users/2", json={"email": "Ada@Example.com"})
+
+    assert resp.status_code == 409
+    assert resp.get_json() == {"error": "Email already exists"}
+    assert query(real_db, "SELECT email FROM users WHERE id = 2") == [("bob@example.com",)]
+    assert query(real_db, "SELECT count(*) FROM user_audit_log") == [(0,)]
+
+
+def test_update_own_email_in_different_case_succeeds(client, real_db):
+    create(client)
+
+    resp = client.patch("/users/1", json={"email": "ADA@example.com"})
+
+    assert resp.status_code == 200
+    assert query(real_db, "SELECT email FROM users WHERE id = 1") == [("ADA@example.com",)]
+    assert query(real_db, "SELECT count(*) FROM user_audit_log") == [(1,)]
+
+
+def test_name_and_email_are_trimmed_and_padded_email_counts_as_duplicate(client, real_db):
+    create(client)
+
+    resp = client.post("/users", json={**ADA, "email": "  Ada@Example.com "})
+
+    assert resp.status_code == 409
+    assert query(real_db, "SELECT count(*) FROM users") == [(1,)]
+
+    created = create(client, {"name": " Bob ", "email": " bob@example.com "})
+    assert (created["name"], created["email"]) == ("Bob", "bob@example.com")
+    assert query(real_db, "SELECT name, email FROM users WHERE id = %s", (created["id"],)) == [
+        ("Bob", "bob@example.com")
+    ]
+
+    resp = client.patch(f"/users/{created['id']}", json={"email": " ADA@example.com "})
+    assert resp.status_code == 409
+
