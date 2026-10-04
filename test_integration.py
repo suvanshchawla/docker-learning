@@ -1,4 +1,5 @@
 import pytest
+from psycopg2.errors import UniqueViolation
 
 from conftest import run_alembic
 
@@ -155,3 +156,27 @@ def test_migration_refuses_duplicate_emails(pg, real_db):
         with real_db, real_db.cursor() as cursor:
             cursor.execute("TRUNCATE users, user_audit_log RESTART IDENTITY")
         run_alembic(pg, "upgrade", "head")
+
+
+def test_unique_index_rejects_case_variant_emails(real_db):
+    with real_db, real_db.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO users (name, email, status) VALUES ('One', 'ada@example.com', 'active')"
+        )
+
+    # A separate transaction, so the failure can't roll back the first row.
+    with pytest.raises(UniqueViolation) as excinfo:
+        with real_db, real_db.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO users (name, email, status) VALUES ('Two', 'Ada@Example.COM', 'active')"
+            )
+
+    assert excinfo.value.diag.constraint_name == "uq_users_email_lower"
+    assert query(real_db, "SELECT email FROM users") == [("ada@example.com",)]
+
+    # A different address is still accepted.
+    with real_db, real_db.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO users (name, email, status) VALUES ('Three', 'grace@example.com', 'active')"
+        )
+    assert query(real_db, "SELECT count(*) FROM users") == [(2,)]
