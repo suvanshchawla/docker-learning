@@ -159,8 +159,8 @@ The last command is destructive for local database data.
 ## Database migrations
 
 The migration history is in `migrations/`. It creates the `users` table, adds
-`created_at`, `status`, `role`, and `phone` columns, and then creates the
-`user_audit_log` table.
+`created_at`, `status`, `role`, and `phone` columns, creates the
+`user_audit_log` table, and finally adds a unique index on `lower(email)`.
 
 Migrations run automatically through the dedicated `migrate` Compose
 service:
@@ -190,6 +190,25 @@ docker compose run --rm \
 The migration service uses the same application image as the API. The
 `Dockerfile` copies `alembic.ini` and `migrations/` into that image.
 
+### Unique emails
+
+The last migration adds the unique index `uq_users_email_lower` on
+`lower(email)`, so `Ada@example.com` and `ada@example.com` count as the same
+address. The stored email keeps the case it was submitted with; only the
+uniqueness check ignores case.
+
+If the table already holds duplicates (ignoring case), the migration stops
+with an error that lists them and changes nothing, so the `migrate` service
+exits and the API does not start. Find the duplicates with:
+
+```sql
+SELECT lower(email), count(*) FROM users GROUP BY lower(email) HAVING count(*) > 1;
+```
+
+Fix or remove those rows, then run `docker compose run --rm migrate` again. The
+migration does not delete data on its own, because it cannot know which
+duplicate to keep.
+
 ## Running tests
 
 There are two test suites:
@@ -201,7 +220,9 @@ There are two test suites:
   `postgres:17` container with [Testcontainers](https://testcontainers.com/),
   apply the real Alembic migrations, and send requests through the API. They
   check the SQL against the real schema, the audit-log writes, database
-  constraints, and that the migrations downgrade and upgrade cleanly.
+  constraints (including the case-insensitive unique email index), and that
+  the migrations downgrade and upgrade cleanly. They also check that the
+  unique-email migration refuses to run when duplicates exist.
 
 Set up a virtual environment once:
 
@@ -317,6 +338,8 @@ To compare against an older commit, check it out in a worktree, copy
 
 ## Current limitations
 
-
 - Email validation only checks the basic `user@domain.tld` shape. It does
-  not confirm that the address exists, and duplicate emails are allowed.
+  not confirm that the address exists.
+- Duplicate emails are rejected by the database, but the API does not handle
+  that error yet: creating or updating a user with an email that is already
+  taken returns `500` instead of `409`.
