@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from flask import Flask, request
+from openapi import DOCS_HTML, build_spec
 from psycopg2 import pool
 from werkzeug.exceptions import HTTPException
 import atexit
@@ -156,6 +157,16 @@ def unexpected_error(e):
 @app.route("/")
 def hello():
     return "Hello from Flask + PostgreSQL!"
+
+
+@app.route("/openapi.json")
+def openapi_spec():
+    return build_spec(DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, PHONE_MAX_LENGTH, STATUSES)
+
+
+@app.route("/docs")
+def docs():
+    return DOCS_HTML
 
 
 @app.route("/health")

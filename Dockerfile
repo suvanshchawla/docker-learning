@@ -15,7 +15,7 @@ WORKDIR /app
 
 COPY --from=builder /install /usr/local
 
-COPY --chown=appuser:appuser app.py .
+COPY --chown=appuser:appuser app.py openapi.py ./
 COPY --chown=appuser:appuser alembic.ini .
 COPY --chown=appuser:appuser migrations ./migrations
 

@@ -61,6 +61,7 @@ The API is available at:
 - <http://localhost:5000/>
 - <http://localhost:5000/users>
 - <http://localhost:5000/health>
+- <http://localhost:5000/docs> (interactive Swagger UI; the raw spec is at `/openapi.json`)
 
 The root endpoint returns a simple greeting. The `/users` endpoints let you
 list and create users, fetch an individual user, update selected fields, or
