@@ -82,7 +82,9 @@ USER_FIELDS = ["name", "email", "status", "role", "phone"]
 REQUIRED_FIELDS = ["name", "email"]
 STATUSES = ["active", "inactive"]
 PHONE_MAX_LENGTH = 15  # matches users.phone VARCHAR(15)
-EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 100
+EMAIL_PATTERN =re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def normalize_user(data):
@@ -168,16 +170,44 @@ def health():
     return {"status": "ok", "database": "ok"}
 
 
+def parse_int_arg(name, default, minimum, maximum=None):
+    """Read an integer query parameter; raises ValueError with a message if it's invalid."""
+    raw = request.args.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum or (maximum is not None and value > maximum):
+        bound = f"between {minimum} and {maximum}" if maximum is not None else f"at least {minimum}"
+        raise ValueError(f"{name} must be {bound}")
+    return value
+
+
 @app.route("/users")
 def users():
+    try:
+        limit = parse_int_arg("limit", DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE)
+        offset = parse_int_arg("offset", 0, 0)
+    except ValueError as e:
+        return {"error": str(e)}, 400
+
     with db_connection() as conn, conn.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM users")
+        total = cursor.fetchone()[0]
         cursor.execute("""
         SELECT id, name, email, status, role, phone
         FROM users
-        """)
+        ORDER BY id
+        LIMIT %s OFFSET %s
+        """, (limit, offset))
         rows = cursor.fetchall()
 
     return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
         "users": [
             {
                 "id": row[0],

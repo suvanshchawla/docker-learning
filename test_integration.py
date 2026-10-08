@@ -25,7 +25,18 @@ def test_create_then_fetch(client, real_db):
 
     assert created == {"id": 1, "status": "active", **ADA}
     assert client.get("/users/1").get_json() == created
-    assert client.get("/users").get_json() == {"users": [created]}
+    assert client.get("/users").get_json() == {"total": 1, "limit": 20, "offset": 0, "users": [created]}
+
+
+def test_list_users_pages_in_id_order(client, real_db):
+    for i in range(5):
+        create(client, {"name": f"User {i}", "email": f"user{i}@example.com"})
+
+    page = client.get("/users?limit=2&offset=2").get_json()
+
+    assert page["total"] == 5
+    assert [u["email"] for u in page["users"]] == ["user2@example.com", "user3@example.com"]
+    assert client.get("/users?offset=10").get_json()["users"] == []
 
 
 def test_status_defaults_to_active(client, real_db):

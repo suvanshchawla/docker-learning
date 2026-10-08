@@ -33,6 +33,7 @@ def db():
     conn.info.transaction_status = TRANSACTION_STATUS_IDLE
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor
+    cursor.fetchone.return_value = (0,)  # GET /users reads the total row count first
 
     def close_cursor(*exc):
         cursor.close()  # `with` closes the cursor...
@@ -104,12 +105,16 @@ def test_closed_connection_is_not_reused(client, db):
 
 def test_list_users(client, db):
     _, conn, cursor = db
+    cursor.fetchone.return_value = (2,)
     cursor.fetchall.return_value = [USER_ROW, (2, "Bob", "bob@example.com", "inactive", None, None)]
 
     resp = client.get("/users")
 
     assert resp.status_code == 200
     assert resp.get_json() == {
+        "total": 2,
+        "limit": 20,
+        "offset": 0,
         "users": [
             USER_JSON,
             {"id": 2, "name": "Bob", "email": "bob@example.com", "status": "inactive", "role": None, "phone": None},
@@ -126,7 +131,36 @@ def test_list_users_empty(client, db):
     resp = client.get("/users")
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"users": []}
+    assert resp.get_json() == {"total": 0, "limit": 20, "offset": 0, "users": []}
+
+
+def test_list_users_pagination_params_reach_the_query(client, db):
+    _, _, cursor = db
+    cursor.fetchall.return_value = []
+
+    resp = client.get("/users?limit=5&offset=10")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["limit"] == 5
+    assert resp.get_json()["offset"] == 10
+    assert cursor.execute.call_args[0][1] == (5, 10)
+
+
+@pytest.mark.parametrize("query, message", [
+    ("limit=abc", "limit must be an integer"),
+    ("limit=0", "limit must be between 1 and 100"),
+    ("limit=101", "limit must be between 1 and 100"),
+    ("offset=-1", "offset must be at least 0"),
+    ("offset=x", "offset must be an integer"),
+])
+def test_list_users_rejects_bad_pagination(client, db, query, message):
+    connect, _, _ = db
+
+    resp = client.get(f"/users?{query}")
+
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": message}
+    connect.assert_not_called()
 
 
 # POST /users

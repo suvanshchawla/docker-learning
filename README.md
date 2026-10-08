@@ -71,10 +71,13 @@ delete a user.
 `503 {"status": "error", "database": "unavailable"}` if the database cannot be
 reached within 3 seconds.
 
-List users:
+List users (paginated, ordered by `id`). `limit` defaults to 20 (max 100) and
+`offset` to 0; invalid values return `400`. The response includes the overall
+`total` so clients know when to stop:
 
 ```bash
-curl http://localhost:5000/users
+curl "http://localhost:5000/users?limit=10&offset=20"
+# {"total": 57, "limit": 10, "offset": 20, "users": [...]}
 ```
 
 Create a user (`name` and `email` are required; `status` defaults to `active`):
