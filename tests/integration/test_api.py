@@ -1,7 +1,7 @@
 import pytest
 from psycopg2.errors import UniqueViolation
 
-from conftest import run_alembic
+from tests.conftest import run_alembic
 
 pytestmark = pytest.mark.integration
 

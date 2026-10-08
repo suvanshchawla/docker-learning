@@ -15,19 +15,27 @@ project is intended as a hands-on introduction to:
 
 ```text
 .
-├── app.py                 # Flask application
-├── Dockerfile             # Multi-stage API image
-├── docker-compose.yml     # API and PostgreSQL services
-├── requirements.txt       # Python dependencies
-├── requirements-dev.txt   # Test dependencies (pytest, testcontainers)
+├── app/
+│   ├── __init__.py        # create_app(): builds the Flask app
+│   ├── db.py              # Connection pool and db_connection()
+│   ├── validation.py      # User payload normalising and validation
+│   ├── errors.py          # JSON error handlers
+│   ├── logs.py            # JSON log formatter and request-ID logging
+│   ├── openapi.py         # OpenAPI spec and Swagger UI page
+│   └── routes/            # health.py, users.py, docs.py (one Blueprint each)
+├── tests/
+│   ├── conftest.py        # Shared fixtures, including the test database
+│   ├── unit/              # Tests with a mocked database
+│   └── integration/       # Tests against real PostgreSQL
+├── migrations/            # Database migration history
 ├── scripts/               # bench.sh and load.py benchmark tools
-├── pytest.ini             # Pytest configuration and markers
-├── conftest.py            # Shared fixtures, including the test database
-├── test_app.py            # Unit tests with a mocked database
-├── test_integration.py    # Integration tests against real PostgreSQL
 ├── .github/workflows/     # GitHub Actions CI
+├── Dockerfile             # Multi-stage API image
+├── docker-compose.yml     # API, migration and PostgreSQL services
 ├── alembic.ini            # Alembic configuration
-└── migrations/            # Database migration history
+├── pytest.ini             # Pytest configuration and markers
+├── requirements.txt       # Python dependencies
+└── requirements-dev.txt   # Test dependencies (pytest, testcontainers)
 ```
 
 ## Prerequisites
@@ -230,10 +238,10 @@ duplicate to keep.
 
 There are two test suites:
 
-- `test_app.py` contains unit tests. They replace `psycopg2` with a mock, so
+- `tests/unit/` contains unit tests. They replace `psycopg2` with a mock, so
   they run in milliseconds and cover error paths that are hard to trigger
   against a real database, such as rollbacks after a failed write.
-- `test_integration.py` contains integration tests. They start a throwaway
+- `tests/integration/` contains integration tests. They start a throwaway
   `postgres:17` container with [Testcontainers](https://testcontainers.com/),
   apply the real Alembic migrations, and send requests through the API. They
   check the SQL against the real schema, the audit-log writes, database

@@ -5,23 +5,29 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-import app as app_module
+from app import create_app, db as app_db
 
-ALEMBIC_INI = Path(__file__).parent / "alembic.ini"
+ALEMBIC_INI = Path(__file__).parent.parent / "alembic.ini"
 
 
 @pytest.fixture(autouse=True)
 def fresh_pool():
     """Every test gets its own connection pool, built from that test's DB_* env."""
-    app_module.close_pool()
+    app_db.close_pool()
     yield
-    app_module.close_pool()
+    app_db.close_pool()
 
 
 @pytest.fixture
-def client():
-    app_module.app.config["TESTING"] = True
-    with app_module.app.test_client() as client:
+def app():
+    app = create_app()
+    app.config["TESTING"] = True
+    return app
+
+
+@pytest.fixture
+def client(app):
+    with app.test_client() as client:
         yield client
 
 
@@ -67,7 +73,7 @@ def real_db(pg, monkeypatch):
     for key, value in pg.items():
         monkeypatch.setenv(key, value)
 
-    conn = app_module.get_connection()
+    conn = app_db.get_connection()
     with conn, conn.cursor() as cursor:
         cursor.execute("TRUNCATE users, user_audit_log RESTART IDENTITY")
     yield conn

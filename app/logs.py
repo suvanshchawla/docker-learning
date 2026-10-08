@@ -3,9 +3,11 @@
 import json
 import logging
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 
-from flask import g, has_request_context
+from flask import g, has_request_context, request
 
 
 class JsonFormatter(logging.Formatter):
@@ -31,3 +33,26 @@ def configure_logger(logger, level):
     logger.handlers[:] = [handler]
     logger.setLevel(level.upper())
     logger.propagate = False  # otherwise pytest/gunicorn root handlers would log it twice
+
+
+def register_request_logging(app):
+    """Tag every request with an ID and log one `request` line when it finishes."""
+
+    @app.before_request
+    def start_request():
+        # Reuse the caller's ID (e.g. from a proxy) so one request can be traced across services.
+        g.request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        g.start_time = time.perf_counter()
+
+    @app.after_request
+    def log_request(response):
+        response.headers["X-Request-ID"] = g.request_id
+        # /health is polled by the Compose healthcheck every few seconds, so keep it out of INFO.
+        level = logging.DEBUG if request.path == "/health" else logging.INFO
+        app.logger.log(level, "request", extra={"fields": {
+            "method": request.method,
+            "path": request.path,
+            "status": response.status_code,
+            "duration_ms": round((time.perf_counter() - g.start_time) * 1000, 2),
+        }})
+        return response
