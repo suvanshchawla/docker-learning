@@ -1,16 +1,21 @@
 from contextlib import contextmanager
-from flask import Flask, request
+from flask import Flask, g, request
+from jsonlog import configure_logger
 from openapi import DOCS_HTML, build_spec
 from psycopg2 import pool
 from werkzeug.exceptions import HTTPException
 import atexit
+import logging
 import os
 import re
 import threading
+import time
+import uuid
 import psycopg2
 
 app = Flask(__name__)
 app.json.sort_keys = False  # Disable sorting of JSON keys
+configure_logger(app.logger, os.environ.get("LOG_LEVEL", "INFO"))
 
 
 CONNECT_TIMEOUT = 3  # seconds to wait when opening a new connection
@@ -135,6 +140,27 @@ def validate_user(data, partial=False):
         return f"phone must be at most {PHONE_MAX_LENGTH} characters"
 
     return None
+
+
+@app.before_request
+def start_request():
+    # Reuse the caller's ID (e.g. from a proxy) so one request can be traced across services.
+    g.request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    g.start_time = time.perf_counter()
+
+
+@app.after_request
+def log_request(response):
+    response.headers["X-Request-ID"] = g.request_id
+    # /health is polled by the Compose healthcheck every few seconds, so keep it out of INFO.
+    level = logging.DEBUG if request.path == "/health" else logging.INFO
+    app.logger.log(level, "request", extra={"fields": {
+        "method": request.method,
+        "path": request.path,
+        "status": response.status_code,
+        "duration_ms": round((time.perf_counter() - g.start_time) * 1000, 2),
+    }})
+    return response
 
 
 @app.errorhandler(HTTPException)
@@ -368,10 +394,9 @@ def update_user(user_id):
             app.logger.warning("Unique constraint violation while updating user")
             raise  # re-raised so the unique_violation handler returns the 409
 
-        except Exception as e:
+        except Exception:
             conn.rollback()
-            app.logger.error("Database error while updating user")
-            print(f"Database error: {e}")
+            app.logger.exception("Database error while updating user")
 
             return {"error": "Database update failed"}, 500
 

@@ -15,7 +15,7 @@ WORKDIR /app
 
 COPY --from=builder /install /usr/local
 
-COPY --chown=appuser:appuser app.py openapi.py ./
+COPY --chown=appuser:appuser app.py openapi.py jsonlog.py ./
 COPY --chown=appuser:appuser alembic.ini .
 COPY --chown=appuser:appuser migrations ./migrations
 
@@ -23,4 +23,4 @@ USER appuser
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]

@@ -166,6 +166,13 @@ docker compose down -v
 
 The last command is destructive for local database data.
 
+The API logs one JSON object per line. Each request produces a `request` entry
+with `method`, `path`, `status`, `duration_ms` and a `request_id`. The ID comes
+from the caller's `X-Request-ID` header if present (otherwise it is generated)
+and is echoed back in the response header, so a failing request can be matched
+to its log lines, including any traceback. Set `LOG_LEVEL` (default `INFO`) to
+change verbosity; `/health` requests are only logged at `DEBUG`.
+
 ## Database migrations
 
 The migration history is in `migrations/`. It creates the `users` table, adds
